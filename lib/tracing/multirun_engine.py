@@ -63,7 +63,6 @@ class EngineNet(Engine):
         netstate_return = False
         # initialize the true network seed either randomly, or based on what has been supplied already + net index
         net_seed = random.randint(0, 2e9) if args.netseed is None else args.netseed + inet
-        random.seed(net_seed)
             
         args_dict = vars(args)
              
@@ -85,18 +84,20 @@ class EngineNet(Engine):
         # if NO compute distribution was enabled, we can use args (since it is not deepcopied) to track all average weights
         if not args.multip:
             args.k_i = {
-                '0': (args.k, true_net.avg_degree(use_weights=True))
+                '0': (true_net.avg_degree(), true_net.avg_degree(use_weights=True))
             }
-                        
-        # first_inf_nodes could have been calculated by this point if an infseed was supplied, and
-        # we deal with random network OR 'nid' key was supplied in the predefined network of args.nettype
-        if first_inf_nodes is None:
-            # turn first_inf into an absolute number if it's a percentage by this point (happens only if predefined net with no nid)
-            args.first_inf = int(args.first_inf if args.first_inf >= 1 else args.first_inf * args.netsize)
-            # Random first infected across simulations - seed random locally
-            first_inf_nodes = random.Random(net_seed).sample(true_net.nodes, args.first_inf)
-        # Change the state of the first_inf_nodes to 'I' to root the simulation
-        true_net.change_state(first_inf_nodes, state='I', update=True)
+        
+        # turn first_inf into an absolute number if it's a percentage by this point (happens only if predefined net with no nid)
+        args.first_inf = int(args.first_inf if args.first_inf >= 1 else args.first_inf * args.netsize)
+        if first_inf_nodes != []:
+            # first_inf_nodes could have been calculated by this point if an infseed was supplied, and
+            # we deal with random network OR 'nid' key was supplied in the predefined network of args.nettype
+            if first_inf_nodes is None:
+                # Random first infected across simulations - seed random locally
+                first_inf_nodes = random.Random(net_seed).sample(true_net.nodes, args.first_inf)
+            # Change the state of the first_inf_nodes to 'I' to root the simulation
+            true_net.change_state(first_inf_nodes, state='I', update=True)
+            
         # Placeholder for the dual network (will be initialized only if args.dual)
         know_net = None
         
@@ -230,6 +231,12 @@ class EngineDual(Engine):
             seeder = args.seed + sim_id
             random.seed(seeder)
             np.random.seed(seeder)
+        # a workaround for setting the infection seed in the iterations rather than beforehand
+        if args.infseed and args.infseed < 0:
+            # Random first infected across simulations - seed random locally
+            first_inf_nodes = random.Random(abs(args.infseed) + sim_id).sample(true_net.nodes, args.first_inf)
+            # Change the state of the first_inf_nodes to 'I' to root the simulation
+            true_net.change_state(first_inf_nodes, state='I', update=True)
             
         # drawing vars
         draw = args.draw
@@ -506,8 +513,10 @@ class EngineDual(Engine):
                             # update active node_list without losing the pointer; this will allow tracing nets to see updates
                             true_net.node_list.clear()
                             true_net.node_list.extend(node_list)
-                            # update counts without traced
-                            true_net.update_counts()
+                            # update counts with/without traced
+                            true_net.update_counts_with_traced() if separate_traced else true_net.update_counts()
+                            # mark no node as last updated, since rates need to be updated for all nodes
+                            sim_true.last_updated = []
                             # keep track of new average degrees IF no distribution was enabled (making args SHARED)
                             if not args.multip:
                                 args.k_i[str(update_iter)] = (true_net.avg_degree(), true_net.avg_degree(use_weights=True))
@@ -593,6 +602,12 @@ class EngineOne(Engine):
             seeder = args.seed + sim_id
             random.seed(seeder)
             np.random.seed(seeder)
+        # a workaround for setting the infection seed in the iterations rather than beforehand
+        if args.infseed and args.infseed < 0:
+            # Random first infected across simulations - seed random locally
+            first_inf_nodes = random.Random(abs(args.infseed) + sim_id).sample(true_net.nodes, args.first_inf)
+            # Change the state of the first_inf_nodes to 'I' to root the simulation
+            true_net.change_state(first_inf_nodes, state='I', update=True)
         
         # drawing vars
         draw = args.draw
@@ -687,6 +702,7 @@ class EngineOne(Engine):
                         break
 
                     e = e1 if (e2 is None or (e1 is not None and e1.time < e2.time)) else e2
+
 
                 # if the event chosen is a tracing event, separate logic follows (NOT updating event.FROM counts!)
                 is_trace_event = (e.to == 'T')
@@ -900,7 +916,8 @@ class EngineOne(Engine):
                 try:
                     # at this stage nettype can either be a simple string, in which case we sample the next available edges from the network object
                     # OR it can be a dict containining keys [1,...] corresponding to update times mapped to dynamic-update sequences
-                    edges_to_update = (true_net.sample_edges(args.edge_sample_size, args.weighted),) if isinstance(args.nettype, str) else args.nettype[str(update_iter)]
+                    edges_to_update = (true_net.sample_edges(args.edge_sample_size, args.weighted, update_iter),) \
+                                        if isinstance(args.nettype, str) else args.nettype[str(update_iter)]
                     if edges_to_update:
                         inf_update = edges_to_update[0]
                         # check if an update for infection network is supplied
@@ -928,8 +945,10 @@ class EngineOne(Engine):
                             # update active node_list without losing the pointer
                             true_net.node_list.clear()
                             true_net.node_list.extend(node_list)
-                            # update counts without traced
-                            true_net.update_counts()
+                            # update counts with/without traced
+                            true_net.update_counts_with_traced() if separate_traced else true_net.update_counts()
+                            # mark no node as last updated, since rates need to be updated for all nodes
+                            sim_true.last_updated = []
                             net_changed = True
                             # keep track of new average degrees IF no distribution was enabled (making args SHARED)
                             if not args.multip:

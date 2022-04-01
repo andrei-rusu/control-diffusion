@@ -14,7 +14,6 @@ import matplotlib.patches as mpatches
 
 from lib.tracing.utils import is_not_empty, rand_pairs, rand_pairs_excluding, get_z_for_overlap, get_overlap_for_z
 from lib.tracing.simulation import Simulation
-from lib.tracing.exp_sampler import UniformSampler, UniformSamplerPresample
 
 # in the state names we distinguish between I (SIR/SEIR) and Ip (Covid) only for drawing legend purposes
 STATES_NAMES = {
@@ -69,6 +68,8 @@ class Network(nx.Graph):
     def __init__(self, *args, **kwargs):
         # initialize the network id to 0
         self.inet = 0
+        # for sampling dynamic edges
+        self.sample_seed = 0
         # set use_weights default - whether or not weights of edges are considered
         self.use_weights = False
         # Atomic Counter for node ids
@@ -182,33 +183,35 @@ class Network(nx.Graph):
             print("The inputted network type is not supported. Default to: random", file=stderr)
             self.links_to_create = links_to_create_dict['random']()
            
-        # self.edge_sample_rng = np.random.RandomState(seed)
+        self.sample_seed = seed
         # perform sampling based on self.links_to_create and edge_sample_size
-        self.add_links(self.sample_edges(edge_sample_size, weighted), update=False)
+        self.add_links(self.sample_edges(edge_sample_size, weighted, 0), update=False)
         
-    def sample_edges(self, edge_sample_size=None, weighted=False):
+    def sample_edges(self, edge_sample_size=None, weighted=False, update_iter=0):
         """
         edge_sample_size is a list of either 1 or 2 elements; 
             if 1, it designates the edge sample size/percentage; if 2, they are interpreted as the location and scale params of a uniform distrib
         """
+        edge_rng = np.random.RandomState(self.sample_seed + update_iter)
         if edge_sample_size and edge_sample_size[0] > 0:
             if len(edge_sample_size) == 1:
                 edge_sample_size = edge_sample_size[0]
             else:
-                edge_sample_size = edge_sample_size[0] + edge_sample_size[1] * self.sampler.get_next_sample()
-            # we can only sample when edge_sample_size exists and is non-zero
-            edges = random.choices(self.links_to_create, k=int(edge_sample_size if edge_sample_size >= 1 else edge_sample_size * len(self.links_to_create)))
+                edge_sample_size = edge_sample_size[0] + edge_sample_size[1] * edge_rng.random()
+            len_links = len(self.links_to_create)
+            indices = edge_rng.choice(len_links, int(edge_sample_size if edge_sample_size >= 1 else edge_sample_size * len_links), replace=False)
+            edges = [self.links_to_create[i] for i in indices]
         else:
             edges = self.links_to_create
         # Add the random edges with/without weights depending on 'weighted' parameter
         if weighted:
             # Create random weights from .5 to 1 and append them to the list of edge tuples
-            edges = [edges[i] + (np.float32(.5 * (1 + weight)),) for i, weight in enumerate(self.sampler.get_next_samples(len(edges)))]
+            # edges = [edges[i] + (np.float32(.5 * (1 + weight)),) for i, weight in enumerate(self.sampler.get_next_samples(len(edges)))]
             # len_edges = len(edges)
             # weights = np.random.uniform(.5, 1, size=len_edges).astype(np.float32)
-            # weights = self.edge_sample_rng.uniform(.5, 1, size=len_edges).astype(np.float32)
-            # # Create random weights from .5 to 1 and append them to the list of edge tuples
-            # edges = [edges[i] + (weights[i],) for i in range(len_edges)]
+            weights = edge_rng.uniform(.5, 1, size=len(edges)).astype(np.float32)
+            # Create random weights from .5 to 1 and append them to the list of edge tuples
+            edges = [e + (weights[i],) for i, e in enumerate(edges)]
         return edges 
 
     def noising_links(self, overlap=None, z_add=0, z_rem=5, keep_nodes_percent=1, conserve_overlap=True, update=True, seed=None, active_based_noising=False):
@@ -290,8 +293,9 @@ class Network(nx.Graph):
     def init_for_simulation(self, first_inf_nodes):
         # this will initialize states to 'S' and tracing status to False
         self.init_states(state='S')
-        # initially, there should be no one traced so we only update the infection status counts
-        self.change_state(first_inf_nodes, state='I', update=True, update_with_traced=False)
+        if first_inf_nodes:
+            # initially, there should be no one traced so we only update the infection status counts
+            self.change_state(first_inf_nodes, state='I', update=True, update_with_traced=False)
     
     def init_states(self, state='S'):
         # Set all nodes back to 'state' and traced=False
@@ -439,7 +443,6 @@ class Network(nx.Graph):
          - node_counts for neighbor node -> for current inf state of nid decrease/increase, for 'T' increment/decremenet
          based on to_traced True/False
         """
-        # a change happens only when its a valid change of traced state
         # switch traced flag for the current node
         self.node_traced[nid] = to_traced
 
@@ -473,6 +476,8 @@ class Network(nx.Graph):
         Whichever of the above, depends directly on to_traced True/False
         - this is meant to be run only on the infection network AND only if the infection status of nid is Infectious
         """
+        # switch traced flag for the current node
+        self.node_traced[nid] = to_traced
         inf_state = self.node_states[nid]
         if inf_state.__contains__('I'):
             # If this is a traced event, count_val = 1 | edge_weight, update time of tracing
@@ -656,7 +661,7 @@ class Network(nx.Graph):
 ###
     
     
-def get_random(netsize=200, k=10, rem_orphans=False, weighted=False, typ='random', p=.1, count_importance=1, nseed=None, inet=0, use_weights=False, presample=None, edge_sample_size=None, **kwargs):
+def get_random(netsize=200, k=10, rem_orphans=False, weighted=False, typ='random', p=.1, count_importance=1, nseed=None, inet=0, use_weights=False, edge_sample_size=None, **kwargs):
     G = Network()
     # give this network an index
     G.inet = inet
@@ -664,8 +669,6 @@ def get_random(netsize=200, k=10, rem_orphans=False, weighted=False, typ='random
     G.use_weights = use_weights
     # attach a neighbor count importance to this network
     G.count_importance = count_importance
-    # rng and corresponding uniform sampling for dynamic edges
-    G.sampler = UniformSamplerPresample(nseed, presample) if presample else UniformSampler(nseed)
     # initialize random conections
     G.init_random(netsize, k, typ=typ, p=p, weighted=weighted, seed=nseed, edge_sample_size=edge_sample_size)
     # Set the active node list (i.e. without orphans if rem_orphans=True)

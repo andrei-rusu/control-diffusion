@@ -269,10 +269,13 @@ def main(args):
         # if args.first_inf >= 1 just turn the value into an int and use that as number of first infected
         args.first_inf = int(args.first_inf if args.first_inf >= 1 else args.first_inf * args.netsize)
         if args.infseed is not None:
-            if args.reindex:
-                nodes = range(args.netsize)
-            # Random first infected across simulations - seed random locally
-            first_inf_nodes = random.Random(args.infseed).sample(nodes, args.first_inf)
+            if args.infseed >= 0:
+                if args.reindex:
+                    nodes = range(args.netsize)
+                # Random first infected across simulations - seed random locally
+                first_inf_nodes = random.Random(args.infseed).sample(nodes, args.first_inf)
+            else:
+                first_inf_nodes = []
 
     
     # Turn off multiprocessing if only one net and one iteration selected

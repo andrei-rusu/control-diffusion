@@ -63,8 +63,8 @@ class Simulation():
             #     if net.node_counts[nid]['I'] != inf_degree:
             #         self.violations += 1
             #         print(f'Issue with {nid=}: {inf_neigh=}, {inf_degree=}, but counts: {net.node_counts[nid]["I"]}')
-            #         print(inf)
-            #         print([net.node_states[neigh] for neigh in net.neighbors(nid)])
+            #         print('Infected neighbors, weight:', inf)
+            #         print('Neighbor states:', [(neigh, net.node_states[neigh], net.node_traced[neigh]) for neigh in net.neighbors(nid)])
             #         if self.violations == 5:
             #             raise ValueError('More than 5 violations of the counts have been found!')
             # if the current node is traced, it should not be possible to move from 'S'
@@ -251,6 +251,16 @@ class Simulation():
         
             current_state = node_states[nid]
             current_traced = node_traced[nid]
+            
+            # if current_state == 'S':
+            #     inf_neigh, inf_degree, inf = net.infected_neighbors(nid)
+            #     if net.node_counts[nid]['I'] != inf_degree:
+            #         self.violations += 1
+            #         print(f'Issue with {nid=}: {inf_neigh=}, {inf_degree=}, but counts: {net.node_counts[nid]["I"]}')
+            #         print('Infected neighbors, weight:', inf)
+            #         print('Neighbor states:', [(neigh, net.node_states[neigh], net.node_traced[neigh]) for neigh in net.neighbors(nid)])
+            #         if self.violations == 5:
+            #             raise ValueError('More than 5 violations of the counts have been found!')
             
             # update infection possible transitions lists
             if not (isolate_S and current_traced and current_state == 'S'):

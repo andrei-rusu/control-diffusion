@@ -413,7 +413,7 @@ class CentralityAgent(MeasureAgent):
         except AttributeError:
             return getattr(nx, self.measure)(net)
         except nx.PowerIterationFailedConvergence:
-            return centr_f(net, max_iter=500)
+            return centr_f(net, max_iter=1000)
         
         
 class WeightAgent(CentralityAgent):
@@ -911,7 +911,7 @@ class SLAgent(MeasureAgent):
                     except AttributeError:
                         centr_dict = getattr(nx, measure)(net)
                     except nx.PowerIterationFailedConvergence:
-                        centr_dict = centr_f(net, max_iter=500)
+                        centr_dict = centr_f(net, max_iter=1000)
                     centr[:, i] = list(centr_dict.values())
                     i += 1
             self.centr = centr
