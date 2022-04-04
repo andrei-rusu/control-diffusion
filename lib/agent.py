@@ -484,13 +484,14 @@ class SLAgent(MeasureAgent):
             ranking_model.agent = self
             if is_target_exist:
                 target_model.agent = self
-            
+        
+        device_type = ranking_model.device.type
         if self.gpu:
-            if ranking_model.device == 'cpu':
+            if device_type == 'cpu':
                 ranking_model = ranking_model.cuda()
                 if self.rl_sampler and is_target_exist:
                     target_model = target_model.cuda()
-        elif ranking_model.device != 'cpu':
+        elif device_type != 'cpu':
             ranking_model = ranking_model.cpu()
             if self.rl_sampler and is_target_exist:
                 target_model = target_model.cpu()
@@ -499,7 +500,7 @@ class SLAgent(MeasureAgent):
             ranking_model.train()
             self.optimizer = getattr(torch.optim, optimizer)(ranking_model.parameters(), lr=lr, **kwargs.get('optimizer_kwargs', {})) \
                                 if isinstance(optimizer, str) else optimizer
-            self.scheduler = getattr(torch.optim.lr_schedulers, scheduler)(self.optimizer, *kwargs.get('scheduler_args', (100))) \
+            self.scheduler = getattr(torch.optim.lr_scheduler, scheduler)(self.optimizer, *kwargs.get('scheduler_args', (100))) \
                                 if isinstance(scheduler, str) else scheduler
             self.loss = kwargs.get('loss', torch.nn.BCEWithLogitsLoss())
             if rl_sampler:
@@ -690,11 +691,14 @@ class SLAgent(MeasureAgent):
         if nodes is None or len(nodes) == 0:
             nodes = list(net)
         torch = self.torch
-        x = torch.from_numpy(self.get_features(net, self.net_changed))
+        device = self.ranking_model.device
+        if self.gpu and self.control_iter % 10 == 0:
+            torch.cuda.empty_cache()
         
         # if self.control_iter % 50 == 0:
         #     print(self.ranking_model.f_scorer.model[0].weight)
         
+        x = torch.from_numpy(self.get_features(net, self.net_changed)).to(device)
         edge_accumulate = False
         edge_index, edge_attr = self.edge_index, self.edge_attr
         # if the edges have not changed since last time, at least one timepoint happened, and mark_delay_same_edges is disabled, self contains all the info needed
@@ -702,11 +706,11 @@ class SLAgent(MeasureAgent):
             edge_index_current, edge_attr_current = self.edge_current
         # otherwise, edge_current tensors will need to be created from the supplied (updated) network
         else:
-            edges_current_time = torch.tensor(list(net.to_directed().edges.data('weight', default=1.)))
+            edges_current_time = torch.tensor(list(net.to_directed().edges.data('weight', default=1.)), device=device)
             # transform list of edges into COO format for torch geometric
-            edge_index_current = edges_current_time[:, :2].type(torch.long).t().contiguous()
+            edge_index_current = edges_current_time[:, :2].long().t().contiguous()
             # mark the time delay feature as 0 for the current timestamp
-            edge_attr_current = torch.nn.functional.pad(input=edges_current_time[:, -1].type(torch.float).reshape(-1, 1),
+            edge_attr_current = torch.nn.functional.pad(input=edges_current_time[:, -1].float().reshape(-1, 1),
                                       pad=(0, 1, 0, 0), mode='constant', value=0)
             # if no edge_index have been remembered yet, this must be the first edge entry, so update edge_index with edge_index_current
             if edge_index is None:
@@ -722,21 +726,14 @@ class SLAgent(MeasureAgent):
         # update the memorized temporal edge_index and edge_attr
         self.edge_index = edge_index
         self.edge_attr = edge_attr
-        
-        if self.gpu:
-            x = x.cuda()
-            edge_index = edge_index.cuda()
-            edge_attr = edge_attr.cuda()
-            self.edge_current = (edge_index_current.cuda(), edge_attr_current.cuda())
-        else:
-            self.edge_current = (edge_index_current, edge_attr_current)
+        self.edge_current = (edge_index_current, edge_attr_current)
             
         if self.lr:
             loss = torch.tensor(0)
             # get the predicted infection status of all nodes (and optionally the state score, for scorer_type=2)
             y_pred, v_score = self.ranking_model(x, edge_index, edge_attr, edge_current=self.edge_current, scorer_type=self.scorer_type)
             # get the true infection status of all nodes (i.e. y_true)
-            y = torch.tensor(net.node_infected, dtype=float).to(y_pred.device)
+            y = torch.tensor(net.node_infected, dtype=float, device=y_pred.device)
             # sometimes node_infected may be larger than the actual number of nodes to allow for nids to be discontinuous
             # this means that one needs to select the active nodes from the node_infected list to get the true list of infections
             if len(x) != len(y):
@@ -1143,12 +1140,13 @@ def get_dataset(record_agent=None, populate_dataset=None, sample_every=1, mark_d
             elif not mark_delay_same_edges:
                 raise HandleDisabledMarkDelay
             # transform list of edges into COO format for torch geometric
-            edge_index_current = edges_current_time[:, :2].type(torch.long).t().contiguous()
+            edge_index_current = edges_current_time[:, :2].long().t().contiguous()
             # mark the time delay feature as 0 for the current timestamp
-            edge_attr_current = torch.nn.functional.pad(input=edges_current_time[:, -1].type(torch.float).reshape(-1, 1),
+            edge_attr_current = torch.nn.functional.pad(input=edges_current_time[:, -1].float().reshape(-1, 1),
                                       pad=(0, 1, 0, 0), mode='constant', value=0)
             edge_index = torch.cat((edge_index, edge_index_current), dim=1)
             # increase by 1 the time delay of all other timestamps (Note, the current one is yet to be appended)
+            # a clone is needed to avoid matching the timedelay increase in the other batches
             edge_attr = edge_attr.clone()
             edge_attr[:, 1] += 1
             edge_attr = torch.cat((edge_attr, edge_attr_current), dim=0)

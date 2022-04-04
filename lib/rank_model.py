@@ -28,7 +28,7 @@ class Model(nn.Module):
     
     def __init__(self, *args, **kwargs):
         super().__init__()
-        self.device = 'cpu'
+        self.device = torch.device('cpu')
 
     def cpu(self, *args, **kwargs):
         on_device = super().cpu(*args, **kwargs)
@@ -80,7 +80,6 @@ class EnsembleModel(Model):
         self.device = self.models[0].nonlinear_scale.device 
         for model in self.models:
             model.device = self.device
-        
         
     def predict(self, *args, i_model=-1, **kwargs):
         model = self.models[i_model] if i_model >= 0 else self

@@ -657,9 +657,11 @@ class NoDaemonProcess(multiprocessing.Process):
 #         pass
 
         
-def get_pool(pytorch=False, daemon=True):
+def get_pool(pytorch=False, daemon=True, set_spawn=False):
     if pytorch:
         from torch import multiprocessing as mp
+        if set_spawn:
+            mp.set_start_method('spawn', force=True)
         if daemon:
             return mp.Pool
     else:

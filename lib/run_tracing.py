@@ -1,3 +1,4 @@
+import os
 import argparse
 import random
 import numpy as np
@@ -177,10 +178,14 @@ PARAMETER_DEFAULTS = {
     'control_after': 5,
     ## number of infected (or percent of the total population) that needs to be surpassed until the control routine is activated
     'control_after_inf': .05,
+    ## whether control uses GPUs
+    'control_gpu': False,
 }
 
     
 def main(args):
+    # get env variables
+    args.cpus = int(os.environ.get('SLURM_CPUS_PER_TASK', cpu_count()))
     
     ### First part of code is concerned with overwriting in a sensible manner args arguments, based on incomaptibilities and other criteria
     
@@ -297,7 +302,6 @@ def main(args):
     # Parametrized by args -> will output the parameter configuration used to obtain these results
     stats = StatsProcessor(args)
     
-    
     args.is_learning_agent = False
     # If an agent was supplied, disable some options
     if args.agent:
@@ -406,12 +410,11 @@ def main(args):
         extra_return = [args.shared]
         # for args.multip == 1 or 3, distribution over networks will be performed (either exclusively or inclusively)
         if args.multip in (1, 3):
-            # get the current cpu count
-            cpus = int(cpu_count())
             # we use normal Pool for distributing only the networks, but NoDaemonPool if we distribute both networks and iters
             # in the first case we use the full cpu count, in the latter we use a half to allow for iters to be distributed
-            daemon, jobs = (True, cpus) if args.multip == 1 else (False, cpus // 2)
-            pool_type = ut.get_pool(pytorch=args.is_learning_agent, daemon=daemon)
+            daemon, jobs = (True, args.cpus) if args.multip == 1 else (False, args.cpus // 2)
+            # different pool types are required for different parameter settings
+            pool_type = ut.get_pool(pytorch=args.is_learning_agent, daemon=daemon, set_spawn=args.control_gpu)
             if args.agent and args.agent.get('half_cpu', True): jobs //= 2
 
             with pool_type(jobs) as pool:

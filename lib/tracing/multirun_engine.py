@@ -1,3 +1,4 @@
+import os
 import random
 import contextlib
 import numpy as np
@@ -154,10 +155,10 @@ class EngineNet(Engine):
         iters_range = range(niters)
 
         if args.multip == 2 or args.multip == 3:
-            # allocate EITHER half or all cpus to pathos.multiprocess for parallelizing simulations for different iterations of 1 init
+            # allocate EITHER half or all cpus to multiprocessing for parallelizing simulations for different iterations of 1 init
             # multip == 2 parallelize only iterations; multip == 3 parallelize both net and iters
-            jobs = int(cpu_count() / (args.multip - 1))
-            pool_type = get_pool(pytorch=args.is_learning_agent, daemon=True)
+            jobs = args.cpus // (args.multip - 1)
+            pool_type = get_pool(pytorch=args.is_learning_agent, daemon=True, set_spawn=args.control_gpu)
             # for agents, reduce memory burden at the cost of performance
             if args.agent and args.agent.get('half_cpu', True): jobs //= 2
                 
@@ -589,7 +590,7 @@ class EngineOne(Engine):
         agent = None
         is_record_agent = False
         if args.agent is not None:
-            agent = Agent.from_dict(**args.agent)
+            agent = Agent.from_dict(**args.agent, gpu=args.control_gpu)
             if args.shared:
                 agent.ranking_model = args.shared.get('model', None)
             is_record_agent = args.is_record_agent
@@ -980,9 +981,7 @@ class EngineOne(Engine):
         if is_record_agent:
             args.shared[sim_id] = (agent.xs, agent.ys, agent.edges)
         elif args.is_learning_agent:
-            del agent.edge_index
-            del agent.edge_attr
-            del agent.edge_current
+            del agent.edge_index, agent.edge_attr, agent.edge_current
             # offline update of parameters is possible only when both lr and rl_sampler are set
             if agent.lr and agent.rl_sampler and not agent.online:
                 print('Update parameters at the end of episode...')

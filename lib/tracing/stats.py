@@ -49,7 +49,10 @@ class StatsProcessor():
         
         summary = defaultdict(dict)
         summary['args'] = vars(args).copy()
+        # deleting large obejcts from the summary object, as these may lead to memory leaks
         del summary['args']['shared']
+        del summary['args']['agent']['ranking_model']
+        del summary['args']['agent']['target_model']
         
         if args.model == 'covid':
             # total time of infectiousness (presymp + symp/asymp duration)
