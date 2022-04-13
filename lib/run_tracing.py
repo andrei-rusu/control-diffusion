@@ -1,4 +1,5 @@
 import os
+import sys
 import argparse
 import random
 import numpy as np
@@ -6,6 +7,7 @@ from collections.abc import Iterable
 from math import ceil
 from multiprocessing import cpu_count, Manager
 
+sys.path.insert(0, sys.path[0] + '\\..')
 from lib.tracing import utils as ut
 from lib.tracing.stats import StatsProcessor
 from lib.tracing.models import get_transitions_for_model, add_trans
@@ -23,7 +25,7 @@ PARAMETER_DEFAULTS = {
     # for DICT the 'update_after' param dictates when each integer key becomes 'active', thus changing the network wiring (dynamic)
     'nettype': 'random',
     ## net size, avg degree, rewire prob, edge weighting switch for various graph types - these only have EFFECT IF nettype is a known nettype (STR type)
-    'netsize': 1000, 'k': 10, 'p': .05, 'weighted': False,
+    'netsize': 1000, 'k': 10., 'p': .05, 'weighted': False,
     # whether to reindex (starting from 0) the nids received as input from an external nettype or not
     'reindex': False,
     ## controls whether edge weights matter and their normalising factor (only has effect when networks with edges have been provided)
@@ -119,7 +121,7 @@ PARAMETER_DEFAULTS = {
 
     #### Simulation controlling parameters
     ## running number of nets, iterations per net and events for each
-    # nevents == 0, run until no more events
+    # if nevents=-1/0/None, run until no more events
     'nnets': 1, 'niters': 1, 'nevents': -1,
     ## seed of simulation exponentials; the seed for network initializations; and the first infected seed
     # if -1, both seed and netseed default to None, whereas infseed is ignored (and netseed gets used for sampling the first infected)
@@ -172,6 +174,8 @@ PARAMETER_DEFAULTS = {
     'agent': {},
     ## external interface with a (falsely) shared memory object across processes
     'shared': None,
+    ## number of episodes, eps_start and eps_decay
+    'control_schedule': [],
     ## number of infected (or percent of the total infected) that the agent 'knows' about at the start of control
     'control_initial_known': .25,
     ## number of days that need to pass before the control routine is activated
@@ -301,6 +305,8 @@ def main(args):
     # Finally, create the object which will hold stats for all simulations
     # Parametrized by args -> will output the parameter configuration used to obtain these results
     stats = StatsProcessor(args)
+    # we can simulate with a range of tracing rates or with a single one, depending on args.taut supplied
+    tracing_rates = np.atleast_1d(args.taut)
     
     args.is_learning_agent = False
     # If an agent was supplied, disable some options
@@ -309,6 +315,10 @@ def main(args):
         args.taur = args.noncomp = 0
         # default dual = 2 to dual = 1 (tracing happens over one network only)
         args.dual = ceil(args.dual / 2)
+        # if unset, assign args.taut to the epsilon sequence for each episode as per the control_schedule
+        if args.control_schedule and tracing_rates[0] == 0:
+            n_episodes, eps_start, eps_decay = args.control_schedule
+            tracing_rates = [round(eps_start * eps_decay**i, 4) for i in range(int(n_episodes))]
         
         # the type of the agent is needed for special logic
         agent_type = args.agent.get('typ', '')
@@ -342,8 +352,7 @@ def main(args):
     presample = args.presample
     # if no taut_two set, delay_two will be used together with all the given taut rates to compute the taut_two rates 
     set_taut_two = (args.taut_two is None)
-    # we can simulate with a range of tracing rates or with a single one, depending on args.taut supplied
-    tracing_rates = np.atleast_1d(args.taut)
+
     for idx, taut in enumerate(tracing_rates):
         # tr_rate=taut will be used as the net.count_importance, which can be used for multiple purposes
         # the id of the current taut will be used by the agent to establish the episode number
@@ -474,14 +483,25 @@ if __name__ == '__main__':
     
     for k in PARAMETER_DEFAULTS.keys():
         default = PARAMETER_DEFAULTS[k]
-        if k == 'taut':
+        if k in {'taut', 'control_schedule', 'edge_sample_size', 'voc_change'}:
             argparser.add_argument('--' + k, type=float, nargs="+", default=default)
+        elif k == 'agent':
+            import json
+            argparser.add_argument('--agent', '-a', type=ut.get_json, default=default)
         else:
             # The following is needed since weirdly bool('False') = True in Python
             typed = type(default) if type(default) != bool else lambda arg: arg.lower() in ("yes", "true", "t", "1")
             argparser.add_argument('--' + k, type=typed, default=default)
-
+    argparser.add_argument('--ranker', '-r', type=ut.get_json, default=None)
+            
     args = argparser.parse_args()
-    args.summary_print = 1 # If script run, full_summary in print mode will always be called
+    # If script run, full_summary in print mode will always be called
+    args.summary_print = 1
+    if args.ranker is not None:
+        from lib.rank_model import Model
+        # k_hops abd static_measures are required to know the input_features of the model
+        args.agent['ranking_model'] = Model.from_dict(k_hops=args.agent.get('k_hops', 2), static_measures=args.agent.get('static_measures', ('degree',)), **args.ranker)
+        # we do not need this argument after initializing the ranking_model
+        del args.ranker
 
     main(args)

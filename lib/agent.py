@@ -430,7 +430,7 @@ class NeighborsAgent(MeasureAgent):
     
 class SLAgent(MeasureAgent):
             
-    def __init__(self, ranking_model=None, target_model=None, static_measures=('degree','eigenvector'), gpu=False, lr=0, mark_delay_same_edges=False, index_weight=-1, pos_weight=False, need_dynamic_compute=False, optimizer='Adam', scheduler=None, grad_clip=0, rl_sampler=None, online=True, rl_args=(.99, .97, 1, 'ppo', -.2, .5, .01, 0, 1, 5), batch_size=0, epochs=1, eps=.5, debug=False, **kwargs):
+    def __init__(self, ranking_model=None, target_model=None, static_measures=('degree',), gpu=False, lr=0, mark_delay_same_edges=False, index_weight=-1, pos_weight=False, need_dynamic_compute=False, optimizer='Adam', scheduler=None, grad_clip=0, rl_sampler=None, online=True, rl_args=(.99, .97, 1, 'ppo', -.2, .5, .01, 0, 1, 5), batch_size=0, epochs=1, eps=.5, debug=False, **kwargs):
         super().__init__(**kwargs)
         self.static_measures = static_measures
         self.need_dynamic_compute = need_dynamic_compute
@@ -460,25 +460,22 @@ class SLAgent(MeasureAgent):
         # only importing iff debug prints is enabled
         if self.debug_print:
             self.metrics = __import__('torchmetrics').functional
-            
-        is_target_exist = target_model is not None
-        
-        if not ranking_model:
-            from lib.rank_model import RankingModel
-            # number of dynamics features are 4 (for self.dynamic_feat) + k_hops (for self.known_inf_neigh)
-            input_features = 4 + self.k_hops
-            for measure in static_measures:
-                try:
-                    input_features += int(measure.split(':')[1])
-                except IndexError:
-                    input_features += 1
-            ranking_model = RankingModel(input_features, 1, torch_seed=self.seed)
+                
+        if not ranking_model or isinstance(ranking_model, dict):
+            from lib.rank_model import Model
+            init_dict = ranking_model if ranking_model else dict(torch_seed=self.seed)
+            ranking_model = Model.from_dict(k_hops, static_measures, **init_dict)
         else:
             # make sure previous iteration's h_prev are never utilized
             ranking_model.h_prev = None
-            if is_target_exist:
+            if target_model is not None:
                 target_model.h_prev = None
-           
+        
+        # if no target_model provided and this is an RL online scenario with updates for the target_model enabled, just copy the ranking_model
+        if rl_sampler and online and target_model is None and rl_args[-1]:
+            target_model = copy.deepcopy(ranking_model)
+                
+        is_target_exist = target_model is not None          
         ## for debugging purposes; this does NOT work with multiprocessing and should be removed soon
         if debug:
             ranking_model.agent = self
@@ -692,7 +689,7 @@ class SLAgent(MeasureAgent):
             nodes = list(net)
         torch = self.torch
         device = self.ranking_model.device
-        if self.gpu and self.control_iter % 10 == 0:
+        if self.gpu and self.control_iter % 1 == 0:
             torch.cuda.empty_cache()
         
         # if self.control_iter % 50 == 0:
@@ -976,7 +973,7 @@ class RLAgent(SLAgent):
     
 class RecordAgent(Agent):
     
-    def __init__(self, static_measures=('degree','eigenvector'), k_hops=2, record_edges=False, n_test=10, seed=None, see_all_uninfected=True, **kwargs):
+    def __init__(self, static_measures=('degree',), k_hops=2, record_edges=False, n_test=10, seed=None, see_all_uninfected=True, **kwargs):
         self.static_measures = static_measures
         self.k_hops = k_hops
         self.n_test = n_test

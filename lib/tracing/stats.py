@@ -47,12 +47,11 @@ class StatsProcessor():
         # turn first_inf into an absolute number if it's a percentage by this point (happens only if predefined net with no nid)
         first_inf = args.first_inf = int(args.first_inf if args.first_inf >= 1 else args.first_inf * args.netsize)
         
-        summary = defaultdict(dict)
-        summary['args'] = vars(args).copy()
+        kwargs = vars(args).copy()
         # deleting large obejcts from the summary object, as these may lead to memory leaks
-        del summary['args']['shared']
-        del summary['args']['agent']['ranking_model']
-        del summary['args']['agent']['target_model']
+        del kwargs['shared']
+        kwargs['agent'].pop('ranking_model', None)
+        kwargs['agent'].pop('target_model', None)
         
         if args.model == 'covid':
             # total time of infectiousness (presymp + symp/asymp duration)
@@ -62,27 +61,29 @@ class StatsProcessor():
             
         contacts_scaler = args.netsize if args.nettype == 'complete' else args.k
         # basic R0 is scaled by the average number of contacts (since the transmission rate is also scaled)
-        summary['args']['r0'] = contacts_scaler * args.beta / infectious_time_rate
+        kwargs['r0'] = contacts_scaler * args.beta / infectious_time_rate
         
         if args.dual:
             if args.maintain_overlap:
                 # If dual=True, true overlap is EITHER the inputted overlap OR (k-zrem)/(k+zadd)
-                summary['args']['true-overlap'] = \
+                kwargs['true-overlap'] = \
                     ut.get_overlap_for_z(args.k, args.zadd, args.zrem) if args.overlap is None else args.overlap
             else:
-                summary['args']['true-overlap'] = -1 # this effectively means the overlap was ignored
+                kwargs['true-overlap'] = -1 # this effectively means the overlap was ignored
                 
             if args.dual == 2 and args.maintain_overlap_two:
-                summary['args']['true-overlap-two'] = \
+                kwargs['true-overlap-two'] = \
                     ut.get_overlap_for_z(args.k, args.zadd_two, args.zrem_two) if args.overlap_two is None else args.overlap_two
             else:
-                summary['args']['true-overlap-two'] = -1
+                kwargs['true-overlap-two'] = -1
         else:
             # when single network run (i.e. dual=False), the true overlap is 1 since all the dual configs are ignored
-            summary['args']['true-overlap'] = 1
+            kwargs['true-overlap'] = 1
             # we also mark the true overlap of the second dual network as effectively inexistent/ignored
-            summary['args']['true-overlap-two'] = -1
-        
+            kwargs['true-overlap-two'] = -1
+            
+        summary = defaultdict(dict)
+        summary['args'] = kwargs
         
         for param, results_for_param in self.param_res.items():
             

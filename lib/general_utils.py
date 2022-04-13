@@ -25,12 +25,12 @@ def tqdm_redirect(*args, **kwargs):
         for x in tqdm.tqdm(*args, file=stdout, **kwargs):
             yield x
             
-def save_model(model, path='saved/ckp', file='rl'):
+def save_model(model, file='rl', path='saved/ckp'):
     import torch
     filename = f'{path}/{file}.pt'
     torch.save(model.state_dict(), filename)
     
-def load_model(model, path='saved/ckp', file='rl'):
+def load_model(model, file='rl', path='saved/ckp'):
     import torch
     filename = f'{path}/{file}.pt'
     model.load_state_dict(torch.load(filename))

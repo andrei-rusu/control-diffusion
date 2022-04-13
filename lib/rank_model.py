@@ -26,6 +26,23 @@ GNN_LAYERS = {
 
 class Model(nn.Module):
     
+    @classmethod
+    def from_dict(self, k_hops=2, static_measures=('degree',), n_models=1, initial_weights='custom', **kwargs):
+        input_features = 4 + k_hops
+        for measure in static_measures:
+            try:
+                input_features += int(measure.split(':')[1])
+            except IndexError:
+                input_features += 1
+        model_cls = EnsembleModel if n_models > 1 else RankingModel
+        model = model_cls(input_features, 1, n_models=n_models, **kwargs)
+        if initial_weights == 'custom':
+            model.apply(init_weights)
+        elif initial_weights:
+            model.load_state_dict(torch.load(initial_weights))
+        return model
+        
+    
     def __init__(self, *args, **kwargs):
         super().__init__()
         self.device = torch.device('cpu')
@@ -546,7 +563,7 @@ class InfoModel(nn.Module):
     
     
 def global_mean_pool(x, batch_idx, deterministic=False):
-    # Note: pyg_nn.global_mean_pool() is NOT deterministic, so an alternative that is needs to be in-place for 'deterministic' to be enabled
+    # Note: pyg_nn.global_mean_pool() is NOT deterministic, so an alternative was implemented for 'deterministic' to be enabled
     if deterministic:
         M = torch.zeros(batch_idx.max()+1, len(x))
         M[batch_idx, torch.arange(len(x))] = 1
@@ -554,3 +571,19 @@ def global_mean_pool(x, batch_idx, deterministic=False):
         return M @ x
     else:
         return pyg_nn.global_mean_pool(x, batch_idx)
+    
+    
+def init_weights(m):
+    """
+    recursively initializes the weights of the model
+    """
+    # if isinstance(m, rank.EnsembleModel):
+    #     nn.init.kaiming_uniform_(m.weight, nonlinearity='relu')
+    if isinstance(m, nn.Linear):
+        nn.init.kaiming_uniform_(m.weight, nonlinearity='relu')
+    # for older versions of PYG which had a weight parameter directly within the MessagePassing class
+    elif isinstance(m, pyg_nn.MessagePassing) and hasattr(m, 'weight'):
+        nn.init.kaiming_uniform_(m.weight, nonlinearity='relu')
+    # # some modules may not have a bias or they may use the name with a bool value to trigger other behavior
+    if hasattr(m, 'bias') and isinstance(m.bias, torch.Tensor):
+        m.bias.data.fill_(0.01)
