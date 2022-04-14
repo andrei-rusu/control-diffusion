@@ -318,7 +318,7 @@ def main(args):
         # if unset, assign args.taut to the epsilon sequence for each episode as per the control_schedule
         if args.control_schedule and tracing_rates[0] == 0:
             n_episodes, eps_start, eps_decay = args.control_schedule
-            tracing_rates = [round(eps_start * eps_decay**i, 4) for i in range(int(n_episodes))]
+            args.taut = tracing_rates = [round(eps_start * eps_decay**i, 4) for i in range(int(n_episodes))]
         
         # the type of the agent is needed for special logic
         agent_type = args.agent.get('typ', '')
@@ -444,7 +444,7 @@ def main(args):
         else:
             for inet in net_range:
                 if nnets > 1:
-                    print('----- Simulating network no.', inet, '-----')
+                    print(f'----- Episode {idx}, simulating network no. {inet} -----')
 
                 # Run simulation, and since no distribution required, return the last networks for inspection purposes
                 # extra_return will be a tuple of true_net, know_net

@@ -430,10 +430,12 @@ class NeighborsAgent(MeasureAgent):
     
 class SLAgent(MeasureAgent):
             
-    def __init__(self, ranking_model=None, target_model=None, static_measures=('degree',), gpu=False, lr=0, mark_delay_same_edges=False, index_weight=-1, pos_weight=False, need_dynamic_compute=False, optimizer='Adam', scheduler=None, grad_clip=0, rl_sampler=None, online=True, rl_args=(.99, .97, 1, 'ppo', -.2, .5, .01, 0, 1, 5), batch_size=0, epochs=1, eps=.5, debug=False, **kwargs):
+    def __init__(self, ranking_model=None, target_model=None, static_measures=('degree',), gpu=False, lr=0, mark_delay_same_edges=False, index_weight=-1, pos_weight=False, need_dynamic_compute=False, optimizer='Adam', schedulers=None, grad_clip=0, rl_sampler=None, online=True, rl_args=(.99, .97, 1, 'ppo', -.2, .5, .01, 0, 1, 5), batch_size=0, epochs=1, eps=.5, debug=False, edge_forget_after=7, pred_vars=(2, 1), **kwargs):
         super().__init__(**kwargs)
         self.static_measures = static_measures
         self.need_dynamic_compute = need_dynamic_compute
+        self.edge_forget_after = edge_forget_after
+        self.pred_vars = pred_vars
         self.mark_delay_same_edges = mark_delay_same_edges
         self.grad_clip = grad_clip
         self.online = online
@@ -464,7 +466,7 @@ class SLAgent(MeasureAgent):
         if not ranking_model or isinstance(ranking_model, dict):
             from lib.rank_model import Model
             init_dict = ranking_model if ranking_model else dict(torch_seed=self.seed)
-            ranking_model = Model.from_dict(k_hops, static_measures, **init_dict)
+            ranking_model = Model.from_dict(self.k_hops, static_measures, **init_dict)
         else:
             # make sure previous iteration's h_prev are never utilized
             ranking_model.h_prev = None
@@ -481,6 +483,10 @@ class SLAgent(MeasureAgent):
             ranking_model.agent = self
             if is_target_exist:
                 target_model.agent = self
+            if self.episode % 2:
+                # overwriting the following ensures that an episode with max-sampling and pred-vars is run with the main model every other iteration
+                self.lr = 0
+                self.episode = 1
         
         device_type = ranking_model.device.type
         if self.gpu:
@@ -493,13 +499,17 @@ class SLAgent(MeasureAgent):
             if self.rl_sampler and is_target_exist:
                 target_model = target_model.cpu()
                 
-        if lr:
+        if self.lr:
             ranking_model.train()
+            self.loss = kwargs.get('loss', torch.nn.BCEWithLogitsLoss())
             self.optimizer = getattr(torch.optim, optimizer)(ranking_model.parameters(), lr=lr, **kwargs.get('optimizer_kwargs', {})) \
                                 if isinstance(optimizer, str) else optimizer
-            self.scheduler = getattr(torch.optim.lr_scheduler, scheduler)(self.optimizer, *kwargs.get('scheduler_args', (100))) \
-                                if isinstance(scheduler, str) else scheduler
-            self.loss = kwargs.get('loss', torch.nn.BCEWithLogitsLoss())
+            schedulers_args = kwargs.get('schedulers_args', (100, .1) * len(schedulers))
+            self.schedulers = []
+            for i, scheduler in enumerate(schedulers):
+                self.schedulers.append(getattr(torch.optim.lr_scheduler, scheduler)(self.optimizer, *schedulers_args[i]) \
+                                            if isinstance(scheduler, str) else scheduler)
+
             if rl_sampler:
                 self.scorer_type = 2
                 self.gamma, self.lamda, self.reward_scale, self.actor_loss, self.clip_ratio, self.value_coeff,\
@@ -548,8 +558,8 @@ class SLAgent(MeasureAgent):
             raise ValueError('The value of "epochs" cannot be 0')           
         
         for o in outer_loop():
-            edge_index = None
-            edge_attr = None
+            edge_index = [None] * self.batch_size
+            edge_attr = [None] * self.batch_size
             self.ranking_model.h_prev = None
             for states, actions, logp_old, values, rewards in batch_loop():
                 adv = torch.tensor(values, device=device)
@@ -559,25 +569,28 @@ class SLAgent(MeasureAgent):
                 # print(self.ranking_model.info.hidden[0].nn[-1].bias)
 
                 # establish the true batch_size (taking into consideration the last batch which may be incomplete)
-                if len(states) == self.batch_size:
-                    batch_size = self.batch_size
-                else:
-                    batch_size = len(states)
+                batch_size = len(states)
+                # if a mismatch exists (i.e. when an incomplete batch is encountered), h_prev needs to be trimmed
+                if self.batch_size != batch_size:
                     index_keep = len(self.all_nodes) * (self.batch_size - batch_size)
                     self.ranking_model.h_prev = self.ranking_model.h_prev[index_keep:]
 
                 x, edge_index_current, edge_attr_current, edge_accumulate, y = zip(*states)
-                if edge_index is None:
-                    # we want edge_index and edge_attr to be lists instead of tuples to allow for item assignment when accumulating the temporal graph
-                    edge_index = list(edge_index_current)
-                    edge_attr = list(edge_attr_current)
-                else:
-                    for i, accum in enumerate(edge_accumulate):
-                        if accum:
-                            edge_index[i] = torch.cat((edge_index[i], edge_index_current[i]), dim=1)
-                            # increase by 1 the time delay of all other timestamps (Note, the current one is yet to be appended)
-                            edge_attr[i][:, 1] += 1
-                            edge_attr[i] = torch.cat((edge_attr[i], edge_attr_current[i]), dim=0)
+                if edge_index[-1] is None:
+                    edge_index[-1] = edge_index_current[0]
+                    edge_attr[-1] = edge_attr_current[0]
+                for i, accum in enumerate(edge_accumulate):
+                    if accum:
+                        edge_attr_last = edge_attr[i-1]
+                        remember_indices = edge_attr_last[:, 1] < self.edge_forget_after
+                        edge_index[i] = torch.cat((edge_index[i-1][:, remember_indices], edge_index_current[i]), dim=1)
+                        # increase by 1 the time delay of all other timestamps (Note, the current one is yet to be appended)
+                        edge_attr_last = edge_attr_last[remember_indices].clone()
+                        edge_attr_last[:, 1] += 1
+                        edge_attr[i] = torch.cat((edge_attr_last, edge_attr_current[i]), dim=0)
+                    else:
+                        edge_index[i] = edge_index[i-1]
+                        edge_attr[i] = edge_attr[i-1]
 
                 ## PYG batching
                 # note, we pass a tuple of both edge_index and edge_index_current to ensure both get batches as adjancey matrices
@@ -632,7 +645,7 @@ class SLAgent(MeasureAgent):
                         loss_ce = self.loss(y_pred, torch.stack(y).to(device))
                         loss = loss + self.ce_coeff * loss_ce
                     # backproing through pi.log_prob is non-deterministic on CUDA due to the use of 'scatter_add_cuda'
-                    if self.gpu and not self.logp_from_score and self.ranking_model.deterministic:
+                    if self.gpu and self.ranking_model.deterministic:
                         torch.use_deterministic_algorithms(False)
                         loss.backward()
                         torch.use_deterministic_algorithms(True)
@@ -645,8 +658,12 @@ class SLAgent(MeasureAgent):
                         torch.nn.utils.clip_grad_norm_(self.ranking_model.parameters(), abs(self.grad_clip))
                     self.optimizer.step()
                     self.optimizer.zero_grad()
-                    if self.scheduler is not None:
-                        self.scheduler.step()
+                    if self.schedulers:
+                        for scheduler in self.schedulers:
+                            try:
+                                scheduler.step()
+                            except TypeError:
+                                scheduler.step(loss_critic)
    
     
     def score_to_prob(self, scores, nodes=None, size=10):
@@ -670,7 +687,6 @@ class SLAgent(MeasureAgent):
                 probs = torch.clamp(scores - scores.min() + self.eps, min=0)
                 probs = probs / probs.sum()
             elif self.rl_sampler == 'escort':
-                # print(self.eps)
                 probs = scores.abs() ** (1 / self.eps)
                 probs = probs / probs.sum()
             pi = torch.distributions.Categorical(probs=probs)
@@ -716,8 +732,10 @@ class SLAgent(MeasureAgent):
             # otherwise, we know that edges have changed (or they should be marked as changed), so we accumulate the temporal multigraph
             else:
                 edge_accumulate = True
-                edge_index = torch.cat((edge_index, edge_index_current), dim=1)
-                # increase by 1 the time delay of all other timestamps (Note, the current one is yet to be appended)
+                remember_indices = edge_attr[:, 1] < self.edge_forget_after
+                edge_index = torch.cat((edge_index[:, remember_indices], edge_index_current), dim=1)
+                 # increase by 1 the time delay of all other timestamps (Note, the current one is yet to be appended)
+                edge_attr = edge_attr[remember_indices].clone()
                 edge_attr[:, 1] += 1
                 edge_attr = torch.cat((edge_attr, edge_attr_current), dim=0)
         # update the memorized temporal edge_index and edge_attr
@@ -822,8 +840,12 @@ class SLAgent(MeasureAgent):
                         if not self.batch_size or self.control_iter % self.batch_size == 0:
                             self.optimizer.step()
                             self.optimizer.zero_grad()
-                            if self.scheduler is not None:
-                                self.scheduler.step()
+                            if self.schedulers:
+                                for scheduler in self.schedulers:
+                                    try:
+                                        scheduler.step()
+                                    except TypeError:
+                                        scheduler.step(loss_critic)
                 else:
                     self.replay_buffer.add((x.cpu(), self.edge_current[0].cpu(), self.edge_current[1].cpu(), edge_accumulate, y.cpu()), chosen_nodes.cpu(), \
                                            logp.sum().item(), v_score.item(), reward)
@@ -846,8 +868,12 @@ class SLAgent(MeasureAgent):
                 if not self.batch_size or self.control_iter % self.batch_size == 0: 
                     self.optimizer.step()
                     self.optimizer.zero_grad()
-                    if self.scheduler:
-                        self.scheduler.step()
+                    if self.schedulers:
+                        for scheduler in self.schedulers:
+                            try:
+                                scheduler.step()
+                            except TypeError:
+                                scheduler.step(loss)
             
             if self.debug_print > 0 and self.control_iter % self.debug_print == 0:
                 print(f'On day {self.control_iter}:')
@@ -862,11 +888,27 @@ class SLAgent(MeasureAgent):
                 return chosen_nodes.cpu().numpy()
                 
         else:
+            # which_edge: 0 use only aggregates; 1 use only currents; 2 use all edges
+            # mask_pred: 0 no mask; 1 mask aggregates (possibly currents); 2 mask all
+            which_edge, mask_pred = self.pred_vars
             with torch.no_grad():
-                node_mask = torch.zeros(len(net), dtype=torch.bool)
-                node_mask[nodes] = True
-                edge_mask = node_mask[edge_index[0]] & node_mask[edge_index[1]]
-                y_pred = self.ranking_model.predict(x, edge_index[:, edge_mask], edge_attr=edge_attr[edge_mask], i_model=self.episode-1)
+                if which_edge == 0:
+                    edge_current = None
+                elif which_edge == 1:
+                    (edge_index, edge_attr) = edge_current = self.edge_current
+                elif which_edge == 2:
+                    edge_current = self.edge_current
+
+                if mask_pred > 0:
+                    node_mask = torch.zeros(len(net), dtype=torch.bool)
+                    node_mask[nodes] = True
+                    edge_mask = node_mask[edge_index[0]] & node_mask[edge_index[1]]
+                    edge_index, edge_attr = edge_index[:, edge_mask], edge_attr[edge_mask]
+                    if which_edge == 2 and mask_pred == 2:
+                        edge_current_mask = node_mask[edge_index_current[0]] & node_mask[edge_index_current[1]]
+                        edge_current = (edge_current[0][:, edge_current_mask], edge_current[1][edge_current_mask])
+                # i_model = -1 for ensemble, while i_model >= 0 is the index of the submodel
+                y_pred = self.ranking_model.predict(x, edge_index, edge_attr=edge_attr, edge_current=edge_current, i_model=self.episode-1)
                 
         return y_pred.detach().cpu().numpy()
     

@@ -171,7 +171,7 @@ class EngineNet(Engine):
         else:
             with no_std_context(enabled=args.animate):
                 for itr in tqdm_redirect(iters_range, desc='Iterations simulation progress'):
-                    print(f'\nRunning iteration {itr} with eps = {tr_rate}:')
+                    print(f'\nRunning iteration {itr}{" during episode " + str(args.agent["episode"]) if args.agent else ""}, with eps = {tr_rate}:')
 
                     # Reinitialize network + Random first infected at the beginning of each run BUT the first one
                     # This is needed only in sequential processing since in multiprocessing the nets are deepcopied anyway

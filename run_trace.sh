@@ -8,7 +8,7 @@ python lib/run_tracing.py -a agent_config.json -r amodel_config.json \
     --use_weights True \
     --dual 0 \
     --edge_sample_size 0.4 0.4 \
-    --control_schedule 1 0.5 0.99 \
+    --control_schedule 3 0.5 0.99 \
     --control_after 5 \
     --control_after_inf .05 \
     --control_initial_known .25 \

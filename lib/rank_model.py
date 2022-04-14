@@ -106,16 +106,14 @@ class EnsembleModel(Model):
         """
         The models within the ensemble may output only y_pred, only v_score or both depending on the 'scorer_type' argument
         """
+        y_pred = v_score = None
         for i_model, model in enumerate(self.models):
-            if i_model == 0:
-                y_pred, v_score = model(*args, **kwargs)
-            else:
-                y_pred_i, v_score_i = model(*args, **kwargs)
-                if y_pred_i is not None:
-                    y_pred = y_pred + self.weight[i_model] * y_pred_i
-                if v_score_i is not None:
-                    v_score = v_score + self.weight[i_model + 1] * v_score_i
-        
+            y_pred_i, v_score_i = model(*args, **kwargs)
+            if y_pred_i is not None:
+                y_pred = y_pred_i if y_pred is None else y_pred + self.weight[i_model] * y_pred_i
+            if v_score_i is not None:
+                v_score = v_score_i if v_score is None else v_score + self.weight[i_model + 1] * v_score_i
+
         if self.avg:
             y_pred = y_pred / self.n_models if y_pred is not None else None
             v_score = v_score / self.n_models if v_score is not None else None
@@ -125,7 +123,10 @@ class EnsembleModel(Model):
 
 class RankingModel(Model):
     
-    def __init__(self, input_dim, output_dim=1, hidden_dim=64, rnn_layer=None, dropout_head=.1, agg='cat', state_score_method='max', last_incl_gnn_outs=False, reduce_h='', torch_seed=None, reset_h_seed=0, deterministic=False, **kwargs):
+    def __init__(self, input_dim, output_dim=1, hidden_dim=64, dropout_head=.1, agg='cat', state_score_method='max', last_incl_gnn_outs=False, reduce_h='', torch_seed=None, reset_h_seed=0, deterministic=False, **kwargs):
+        """
+        agg and dropout_head are hyperparameters that are utilized by the submodule constructors, but they also influence the logic at the RankingModel level
+        """
         super().__init__()
         self.deterministic = False
         self.h_seed = None
@@ -147,7 +148,7 @@ class RankingModel(Model):
     
         self.hidden_dim = hidden_dim
         self.last_incl_gnn_outs = last_incl_gnn_outs
-        self.reduce_h = reduce_h
+        self.reduce_h = reduce_h.lower()
         # always mark task as timenode
         kwargs['task'] = 'timenode'
         # we completely 'dropout' the heads of the InfoModels by setting dropout_head = 1 (i.e. keep only backbones)
@@ -170,11 +171,11 @@ class RankingModel(Model):
         
         # hidden state of previous timestamp
         self.h_prev = None
-        if reduce_h in ('GRU', 'LSTM'):
+        if reduce_h in ('gru', 'lstm'):
             g_hidden_model = RNN
             layers_head = kwargs.get('layers_head', 1)
             self.h_shape = [layers_head, 0, hidden_dim]
-            self.mode = 1 if reduce_h == 'GRU' else 2
+            self.mode = 1 if reduce_h == 'gru' else 2
         else:
             g_hidden_model = MLP
             self.h_shape = [0, hidden_dim]
@@ -191,13 +192,13 @@ class RankingModel(Model):
             f_input_dim += hidden_dim
         
         # the dropout of the MLP/RNN layers will be the supplied dropout_head, while the layers will be the layers_head
-        self.g_hidden = g_hidden_model(g_input_dim, hidden_dim, agg=agg, rnn_layer=reduce_h, **kwargs)
-        # last MLP will always have a linear head (to output_dim)
+        self.g_hidden = g_hidden_model(g_input_dim, hidden_dim, dropout_head=dropout_head, agg=agg, rnn_layer=reduce_h, **kwargs)
+        # last MLP will always have a linear head (to output_dim), whereas g_hidden supports either having or not having one
         kwargs['linear_head'] = True
-        self.f_scorer = MLP(f_input_dim, output_dim, agg=agg, **kwargs)
+        self.f_scorer = MLP(f_input_dim, output_dim, dropout_head=dropout_head, agg=agg, **kwargs)
         # the state-value MLP will have a state_scorer to output a value
         state_scorer = getattr(pyg_nn, f'global_{state_score_method}_pool')
-        self.f_value = MLP(f_input_dim, output_dim, agg=agg, state_scorer=state_scorer, **kwargs)    
+        self.f_value = MLP(f_input_dim, output_dim, dropout_head=dropout_head, agg=agg, state_scorer=state_scorer, **kwargs)  
     
     def reset_device(self):
         self.device = self.nonlinear_scale.device
@@ -284,10 +285,10 @@ class RankingModel(Model):
     
 class RNN(nn.Module):
     
-    def __init__(self, input_dim, output_dim, hidden_dim=64, dropout_head=.1, layers_head=1, agg='cat', rnn_layer='GRU', linear_head=False, **kwargs):
+    def __init__(self, input_dim, output_dim, hidden_dim=64, dropout_head=.1, agg='cat', rnn_layer='GRU', layers_head=1, linear_head=False, **kwargs):
         super().__init__()
         self.agg = agg
-        rnn_layer = eval(f'nn.{rnn_layer}')
+        rnn_layer = eval(f'nn.{rnn_layer.upper()}')
         self.model = rnn_layer(input_dim, hidden_dim, num_layers=layers_head, dropout=dropout_head)
         self.output = nn.Linear(hidden_dim, output_dim) if linear_head else nn.Identity()
         
@@ -309,7 +310,7 @@ class RNN(nn.Module):
     
 class MLP(nn.Module):
     
-    def __init__(self, input_dim, output_dim, hidden_dim=64, dropout_head=.1, layers_head=1, agg='cat', nonlin_head='ReLU', state_scorer=None, linear_head=True, **kwargs):
+    def __init__(self, input_dim, output_dim, hidden_dim=64, dropout_head=.1, agg='cat', nonlin_head='ReLU', layers_head=1, linear_head=True, state_scorer=None, **kwargs):
         super().__init__()
         self.agg = agg
         nonlin = nonlin_head if nonlin_head else kwargs.get('nonlin', 'Identity')
@@ -337,7 +338,7 @@ class MLP(nn.Module):
 
 class InfoModel(nn.Module):
     
-    def __init__(self, input_dim, output_dim=1, hidden_dim=64, transform_pre_mp=False, num_layers=3, nonlin='ReLU', norm_layer=None, dropout=.2, dropout_head=0, task='node', layer_name='GCN', use_edge_attr=True, edge_dim=0, last_fully_adjacent=False, skip_connect=True, torch_seed=None, deterministic=False, add_self_loops=False, **kwargs):
+    def __init__(self, input_dim, output_dim=1, hidden_dim=64, transform_pre_mp=False, num_layers=2, nonlin='ReLU', norm_layer=None, dropout=.2, dropout_head=0, task='node', layer_name='GCN', use_edge_attr=True, edge_dim=0, last_fully_adjacent=False, skip_connect=True, torch_seed=None, deterministic=False, add_self_loops=False, **kwargs):
         super().__init__()
         self.deterministic = deterministic
         if torch_seed is not None:
@@ -431,7 +432,7 @@ class InfoModel(nn.Module):
             self.head = nn.Sequential(
                 nn.Linear(out_channels, out_channels),
                 nn.Dropout(dropout_head), 
-                # self.nonlin(inplace=True), 
+                # self.nonlin(), 
                 nn.Linear(out_channels, output_dim))
 
         
@@ -546,8 +547,7 @@ class InfoModel(nn.Module):
                     # assert torch.allclose(global_mean_pool(x, batch_idx, deterministic=True).flatten(), global_mean_pool(x, batch_idx, deterministic=False))
                     global_x = l(global_mean_pool(x, batch_idx, deterministic=self.deterministic))
                     # add back to x, while keeping the same batch dimensionality (equivalent to skip connection with fully-adjacent layer)
-                    x += global_x[batch_idx]
-                    emb = x
+                    x = emb = x + global_x[batch_idx]
                 else:
                     # for non graph conv layers (nonlinearity/norm), simply pass through x
                     x = l(x)
