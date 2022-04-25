@@ -1,4 +1,22 @@
-python lib/run_tracing.py -a agent_config.json -r amodel_config.json \
+if [ -z "$SLURM_ARRAY_TASK_ID" ]
+then
+    SLURM_ARRAY_TASK_ID=0
+fi
+
+# Needed such that matplotlib does not produce error because XDG_RUNTIME_DIR not set
+export MPLBACKEND=Agg
+# Needed in newer versions of torch/cudnn
+export CUBLAS_WORKSPACE_CONFIG=":4096:8"
+
+#Change to directory from which job was submitted
+cd "$HOME/control-diffusion"
+
+module load conda
+source activate graph
+
+gridentry=($(python scripts/paramgrid.py --id $SLURM_ARRAY_TASK_ID --sample 10))
+
+python lib/run_tracing.py -a temp/agent_$SLURM_ARRAY_TASK_ID.json -r temp/amodel_$SLURM_ARRAY_TASK_ID.json \
     --nettype "barabasi:5:1" \
     --reindex False \
     --netsize 100 \
@@ -7,11 +25,10 @@ python lib/run_tracing.py -a agent_config.json -r amodel_config.json \
     --rem_orphans False \
     --use_weights True \
     --dual 0 \
-    --edge_sample_size 0.4 0.4 \
-    --control_schedule 3 0.5 0.99 \
-    --control_after 5 \
+    --control_schedule 2 0.5 0.99 \
+    --control_after ${gridentry[1]} \
     --control_after_inf .05 \
-    --control_initial_known .25 \
+    --control_initial_known ${gridentry[0]} \
     --control_gpu 0 \
     --first_inf 5 \
     --taut 0 \
@@ -32,4 +49,6 @@ python lib/run_tracing.py -a agent_config.json -r amodel_config.json \
     --multip 0 \
     --nnets 1 \
     --niters 1 > data/runs/run_stats.json
+    
+# Remove running artefacts from sim results
 sed -i -n '/args/,$p' data/runs/run_stats.json

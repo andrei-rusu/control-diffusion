@@ -9,10 +9,11 @@ from collections import defaultdict
 from collections.abc import Iterable
 
 import numpy as np
+import scipy.stats as ss
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 
-from lib.tracing.utils import is_not_empty, rand_pairs, rand_pairs_excluding, get_z_for_overlap, get_overlap_for_z
+from lib.tracing.utils import is_not_empty, rand_pairs, rand_pairs_excluding, get_z_for_overlap, get_overlap_for_z, float_defaultdict
 from lib.tracing.simulation import Simulation
 
 # in the state names we distinguish between I (SIR/SEIR) and Ip (Covid) only for drawing legend purposes
@@ -51,13 +52,11 @@ MODEL_TO_STATES = {
 }
 
 
-def float_defaultdict():
-    """
-    Replacing 'lambda: defaultdict(float)'' in order to make the object pickleble
-    """
-    return defaultdict(float)
-
-
+def configuration_model(deg_sequence, seed=0):
+    G = nx.configuration_model(deg_sequence, create_using=nx.Graph, seed=seed)
+    G.remove_edges_from(nx.selfloop_edges(G))
+    return G
+    
 class Network(nx.Graph):
     
     UNINF_STATES = {'S'}
@@ -143,7 +142,7 @@ class Network(nx.Graph):
             probs = np.ones((n_community, n_community)) * p
             # and 'k'/'n' as the intracommunity edge probability
             np.fill_diagonal(probs, k / n)
-        if 'barabasi:' in typ:
+        elif 'barabasi:' in typ:
             splits = typ.split(':')
             infer_p_matching_k = True
             try:
@@ -160,6 +159,24 @@ class Network(nx.Graph):
             if infer_p_matching_k:
                 # based on formula in Dual-Barabasi paper
                 p = round((k / (2 * (n - max((m1,m2)))) * n - m2) / (m1 - m2), 6)
+        elif 'config' in typ:
+            splits = typ.split(':')
+            rng = np.random.RandomState(seed)
+            try:
+                norm_w, norm_l, norm_v = map(float, splits[1].split(','))
+            except (IndexError, ValueError):
+                norm_w, norm_l, norm_v = (0, 0, 1)
+            dist = ss.norm(norm_l, norm_v)
+            try:
+                power_w, power_a = map(float, splits[2].split(','))
+            except (IndexError, ValueError):
+                power_w, power_a = (1, .5)
+            typ = 'config'
+            weights = np.fromiter((norm_w * dist.pdf(i) + power_w * i ** (-power_a) for i in range(1, n)), dtype=float)
+            weights /= weights.sum()
+            deg_sequence = rng.choice(range(1, n), size=n, replace=True, p=weights)
+            if sum(deg_sequence) % 2:
+                deg_sequence[0] += 1
                 
         links_to_create_dict = {
             # Generate random pairs (edges) without replacement
@@ -176,13 +193,15 @@ class Network(nx.Graph):
             'sbm': lambda: list(nx.stochastic_block_model(sizes, probs, seed=seed).edges),
             # fully connected network
             'complete': lambda: list(nx.complete_graph(n).edges),
+            # config model
+            'config': lambda: list(configuration_model(deg_sequence, seed=seed).edges)
         }
         try:
             self.links_to_create = links_to_create_dict[typ]()
         except KeyError:
             print("The inputted network type is not supported. Default to: random", file=stderr)
             self.links_to_create = links_to_create_dict['random']()
-           
+        
         self.sample_seed = seed
         # perform sampling based on self.links_to_create and edge_sample_size
         self.add_links(self.sample_edges(edge_sample_size, weighted, 0), update=False)
@@ -192,6 +211,7 @@ class Network(nx.Graph):
         edge_sample_size is a list of either 1 or 2 elements; 
             if 1, it designates the edge sample size/percentage; if 2, they are interpreted as the location and scale params of a uniform distrib
         """
+        # for ensuring backward consistency, we utilize RandomState rather than default_rng
         edge_rng = np.random.RandomState(self.sample_seed + update_iter)
         if edge_sample_size and edge_sample_size[0] > 0:
             if len(edge_sample_size) == 1:
@@ -205,14 +225,24 @@ class Network(nx.Graph):
             edges = self.links_to_create
         # Add the random edges with/without weights depending on 'weighted' parameter
         if weighted:
-            # Create random weights from .5 to 1 and append them to the list of edge tuples
-            # edges = [edges[i] + (np.float32(.5 * (1 + weight)),) for i, weight in enumerate(self.sampler.get_next_samples(len(edges)))]
-            # len_edges = len(edges)
-            # weights = np.random.uniform(.5, 1, size=len_edges).astype(np.float32)
-            weights = edge_rng.uniform(.5, 1, size=len(edges)).astype(np.float32)
+            if isinstance(weighted, list):
+                norm_w, norm_l, norm_a = weighted[0] if weighted[0] else (.47, .41, .036)
+                ndist = ss.norm(norm_l, norm_a)
+                beta_w, beta_l, beta_a = weighted[1] if len(weighted) > 1 and weighted[1] else (.53, 5.05, 20.02)
+                bdist = ss.beta(beta_l, beta_a)
+                w_sum = norm_w + beta_w
+                norm_w /= w_sum
+                beta_w /= w_sum
+                # A stream of indices from which to choose the component
+                mixture_idx = edge_rng.choice(2, size=len(edges), replace=True, p=(norm_w, beta_w))
+                # y is the mixture sample
+                weights = np.fromiter((ndist.rvs() if i == 0 else bdist.rvs() for i in mixture_idx), dtype=np.float32)
+            else:
+                # Create random weights from .5 to 1 and append them to the list of edge tuples
+                weights = edge_rng.uniform(.5, 1, size=len(edges)).astype(np.float32)
             # Create random weights from .5 to 1 and append them to the list of edge tuples
             edges = [e + (weights[i],) for i, e in enumerate(edges)]
-        return edges 
+        return edges
 
     def noising_links(self, overlap=None, z_add=0, z_rem=5, keep_nodes_percent=1, conserve_overlap=True, update=True, seed=None, active_based_noising=False):
         # Recover the number of nodes for which noising links operations will be performed

@@ -41,6 +41,13 @@ def is_not_empty(lst):
     return lst is not None and getattr(lst, 'size', len(lst))
 
 
+def float_defaultdict():
+    """
+    Replacing 'lambda: defaultdict(float)'' in order to make the object pickleble
+    """
+    return defaultdict(float)
+
+
 def r_from_growth(growth, method='exp', t=7, mean=6.6, shape=1.87, inv_scale=0.28):
     """
     Get r from growth rate (NOT exponential growth) assuming Gamma distribution of generation time

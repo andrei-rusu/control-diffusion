@@ -7,7 +7,7 @@ from collections.abc import Iterable
 from math import ceil
 from multiprocessing import cpu_count, Manager
 
-sys.path.insert(0, sys.path[0] + '\\..')
+sys.path.insert(0, os.path.join(sys.path[0], '..'))
 from lib.tracing import utils as ut
 from lib.tracing.stats import StatsProcessor
 from lib.tracing.models import get_transitions_for_model, add_trans
@@ -264,7 +264,7 @@ def main(args):
     else:
         nodes = range(args.netsize)
         # if use_weights is enabled, automatically make the network to be created weighted
-        args.weighted |= args.use_weights
+        args.weighted = args.weighted or args.use_weights
         # dynamic edge updates in this setting gets enabled only when the args.edge_sample_size list has entries
         args.is_dynamic &= bool(args.edge_sample_size)
 

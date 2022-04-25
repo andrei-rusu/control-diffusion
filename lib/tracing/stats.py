@@ -50,8 +50,9 @@ class StatsProcessor():
         kwargs = vars(args).copy()
         # deleting large obejcts from the summary object, as these may lead to memory leaks
         del kwargs['shared']
-        kwargs['agent'].pop('ranking_model', None)
-        kwargs['agent'].pop('target_model', None)
+        if kwargs['agent'] is not None:
+            kwargs['agent'].pop('ranking_model', None)
+            kwargs['agent'].pop('target_model', None)
         
         if args.model == 'covid':
             # total time of infectiousness (presymp + symp/asymp duration)
