@@ -160,21 +160,28 @@ class Network(nx.Graph):
                 # based on formula in Dual-Barabasi paper
                 p = round((k / (2 * (n - max((m1,m2)))) * n - m2) / (m1 - m2), 6)
         elif 'config' in typ:
+            # typ should have a format like 'config:{norm-settings}:{powerlaw-settings}'
             splits = typ.split(':')
             rng = np.random.RandomState(seed)
             try:
-                norm_w, norm_l, norm_v = map(float, splits[1].split(','))
+                norm_w, power_w = map(float, splits[1].split(','))
             except (IndexError, ValueError):
-                norm_w, norm_l, norm_v = (0, 0, 1)
-            dist = ss.norm(norm_l, norm_v)
+                norm_w, power_w = (p, 1-p)
             try:
-                power_w, power_a = map(float, splits[2].split(','))
+                norm_mean, norm_std = map(float, splits[2].split(','))
             except (IndexError, ValueError):
-                power_w, power_a = (1, .5)
+                norm_w, norm_std = (0, 1)
+            dist = ss.norm(norm_mean, norm_std)
+            try:
+                power_a = float(splits[3])
+            except (IndexError, ValueError):
+                power_a = .5
             typ = 'config'
-            weights = np.fromiter((norm_w * dist.pdf(i) + power_w * i ** (-power_a) for i in range(1, n)), dtype=float)
+            # the possible degree range will be from 1 to max_degree (controlled via k, but cannot be larger than n)
+            deg_range = range(1, min(k, n))
+            weights = np.fromiter((norm_w * dist.pdf(i) + power_w * i ** (-power_a) for i in deg_range), dtype=float)
             weights /= weights.sum()
-            deg_sequence = rng.choice(range(1, n), size=n, replace=True, p=weights)
+            deg_sequence = rng.choice(deg_range, size=n, replace=True, p=weights)
             if sum(deg_sequence) % 2:
                 deg_sequence[0] += 1
                 
@@ -202,7 +209,8 @@ class Network(nx.Graph):
             print("The inputted network type is not supported. Default to: random", file=stderr)
             self.links_to_create = links_to_create_dict['random']()
         
-        self.sample_seed = seed
+        if seed is not None:
+            self.sample_seed = seed
         # perform sampling based on self.links_to_create and edge_sample_size
         self.add_links(self.sample_edges(edge_sample_size, weighted, 0), update=False)
         
@@ -210,6 +218,9 @@ class Network(nx.Graph):
         """
         edge_sample_size is a list of either 1 or 2 elements; 
             if 1, it designates the edge sample size/percentage; if 2, they are interpreted as the location and scale params of a uniform distrib
+        weighted is either a bool or a list of 2 elements
+            if True, the edge weights are sampled from uniform(.5, 1)
+            if list, the edge weights are sampled from a mixture of norm(*weighted[0]) and beta(*weighted[1])
         """
         # for ensuring backward consistency, we utilize RandomState rather than default_rng
         edge_rng = np.random.RandomState(self.sample_seed + update_iter)
