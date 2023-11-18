@@ -1,1 +1,0 @@
-sed -i -n '/args/,$p' data/runs/run_stats.json
