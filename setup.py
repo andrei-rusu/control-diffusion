@@ -14,18 +14,28 @@ setup(
         'Bug Tracker': 'https://github.com/andrei-rusu/control-diffusion/issues',
     },
     license='MIT',
-    classifiers=[...],
+    classifiers=[
+        'Development Status :: 4 - Beta',
+        'Intended Audience :: Developers',
+        'Topic :: Software Development :: Libraries',
+        'License :: OSI Approved :: MIT License',
+        'Programming Language :: Python :: 3.9',
+        'Operating System :: OS Independent',
+    ],
     packages=find_packages(),
-    python_requires='>=3.9',
+    python_requires='>=3.9, <3.10',
     install_requires=[
         'matplotlib', 
         'numpy', 
-        'scikit-learn', 
-        'networkx'
+        'networkx',
     ],
     extras_require={
         'learn': [
+            'pandas',
+            'scikit-learn',
             'torch',
+            'torch_scatter',
+            'torch_sparse',
             'torch_geometric',
         ],
     },

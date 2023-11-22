@@ -5,5 +5,5 @@ __license__ = 'MIT'
 __description__ = 'A Python package containing agents that can rank nodes in a network for the purpose of controlling diffusion processes.'
 __all__ = ['agent', 'general_utils', 'Agent']
 
-from .control_diffusion import agent, general_utils, Agent
 
+from .control_diffusion import agent, general_utils, Agent

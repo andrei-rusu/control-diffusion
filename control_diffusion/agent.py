@@ -4,7 +4,6 @@ import json
 import copy
 import heapq
 import numpy as np
-import pandas as pd
 import networkx as nx
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
@@ -15,8 +14,6 @@ from pydoc import locate
 from contextlib import nullcontext
 from collections import deque, Counter
 from collections.abc import Iterable
-from sklearn.manifold import TSNE
-from sklearn.cluster import AgglomerativeClustering
 
 from .general_utils import tqdm_redirect, round_decimals_up, plot_dendrogram, ReplayBuffer
 
@@ -124,6 +121,20 @@ class Agent:
             An instance of the specified agent type.
         """
         return AGENT_TYPE[typ.split('-')[0].lower()](name=typ.capitalize(), **kwargs)
+    
+    @staticmethod
+    def model_from_dict(**kwargs):
+        """
+        Create a Model object from a dictionary of parameters.
+
+        Args:
+            **kwargs: Additional keyword arguments to pass to the model constructor.
+
+        Returns:
+            An instance of the specified Model type.
+        """
+        from .rank_model import Model
+        return Model.from_dict(**kwargs)
            
     @classmethod
     def get_subclasses(cls):
@@ -1532,6 +1543,8 @@ class SLAgent(MeasureAgent):
                 self.inf_model.eval()
             return None, None
         else:
+            from sklearn.manifold import TSNE
+            from sklearn.cluster import AgglomerativeClustering
             emb, prev_inf, prev_neg = self.cluster_prev
             now_inf = np.array(net.node_infected)
             new_inf = set(np.nonzero(now_inf != prev_inf)[0])
