@@ -45,6 +45,8 @@ class Model(nn.Module):
     def from_dict(k_hops=2, static_measures=('degree',), n_models=1, initial_weights='custom', **kwargs):
         """
         Creates a new instance of a ranking model from a dictionary of hyperparameters.
+        The number of `input features` is calculated as 4 (number of dynamic features) + `k_hops` + number of static measures.
+        Note, some static measures may have a variable number of features, thus the number of `input_features` needs to reflect that.
 
         Args:
             k_hops (int): The number of hops for which infectious neighborhood features were computed

@@ -20,6 +20,8 @@ from .general_utils import tqdm_redirect, round_decimals_up, plot_dendrogram, Re
 
 UNACCEPTED_FOR_TEST_TRACE = {'H', 'D'}
 PERCEIVED_UNINF_STATES = {'S', 'E', 'R'}
+CKP_LOCATION = 'models/'
+TB_LOCATION = 'tensorboard/'
 
 
 class Agent:
@@ -171,7 +173,6 @@ class Agent:
         self.episode = episode
         self.eps = epsilon
         self.sim_id = sim_id
-        self.save_path = save_path
         self.ckp_ep = ckp_ep
         self.ckp = ckp
         self.tb_log = tb_log
@@ -218,14 +219,18 @@ class Agent:
         self.norm_hops = 1 / (n_nodes - 1) if k_hops < 0 else 1
         self.k_hops = abs(k_hops)
         self.known_inf_neigh = np.zeros((self.n_nodes, self.k_hops), dtype=np.float32) if k_hops else None
-        # populate the `writer` attribute with an instance of a logger
+        # the `writer` object will be populated with an instance of a logger, if appropriate arguments are provided
         self.writer = None
-        if tb_log and (ckp_ep > 0 or ckp > 0):
-            if name is None:
-                name = type(self).__name__.replace('Agent', '')
-            self.writer = __import__('torch').utils.tensorboard.SummaryWriter(log_dir=save_path+name)
-            if ckp > 0:
-                self.writer.add_custom_scalars(tb_layout)
+        # give the agent a name if not given
+        if name is None:
+            name = type(self).__name__
+        if ckp_ep > 0 or ckp > 0:
+            self.save_path = save_path + name
+            os.makedirs(self.save_path, exist_ok=True)
+            if tb_log:
+                self.writer = __import__('torch').utils.tensorboard.SummaryWriter(log_dir=self.save_path+TB_LOCATION)
+                if ckp > 0:
+                    self.writer.add_custom_scalars(tb_layout)
         
     def control(self, net, control_day=0, initial_known_ids=(), net_changed=True, missed_days=0):
         """
@@ -438,7 +443,6 @@ class Agent:
                     if self.explaining[0] == 1:
                         self.display(plt.figure(plt.get_fignums()[-1]))
                     elif self.explaining[0] == 2:
-                        plt.savefig(f'fig/batch/explain/{control_day}.eps', bbox_inches='tight')
                         plt.savefig(f'fig/batch/explain/{control_day}.png', bbox_inches='tight')
 
             else:
@@ -625,7 +629,7 @@ class Agent:
             torch = self.torch
             self.tb_layout['Ep loss'][f'Ep {idx} loss'] = ["Multiline", [f'{idx}-loss',]]
             self.writer.add_scalar(f'{idx}-loss', self.loss_log, self.control_day)
-            ckp_path = self.save_path + 'models/'
+            ckp_path = self.save_path + CKP_LOCATION
             os.makedirs(ckp_path, exist_ok=True)
             torch.save({
                 'model_state_dict': self.ranking_model.state_dict(),
@@ -645,16 +649,16 @@ class Agent:
             None
         """
         if self.ckp_ep > 0 and self.episode % self.ckp_ep == 0:
-            # we write the episode evolution for each sim_id on a separate line
-            rwd_path = self.save_path + 'r.log'
+            # we write the total inf for each `sim_id` per a single separate line after EVERY `ckp_ep` episodes
+            rwd_path = self.save_path + 'agent_episode.log'
             sim_id = self.sim_id
             if os.path.isfile(rwd_path):
                 with open(rwd_path, 'r') as f:
                     lines = f.readlines()
                 lines += ['\n'] * (sim_id + 1 - len(lines))
-                lines[sim_id] = f'{lines[sim_id].strip()} {total_inf} \n'
+                lines[sim_id] = f'{lines[sim_id].strip()} {total_inf}\n'
             else:
-                lines = f'{total_inf} \n'
+                lines = f'{total_inf}\n'
             with open(rwd_path, 'w') as f:
                 f.writelines(lines)
             
@@ -663,7 +667,7 @@ class Agent:
                 self.writer.add_scalar('total_inf', total_inf, self.episode + sim_id)
             # this gets triggered only when `self` is an SL/RL agent in learning mode
             if isinstance(self, SLAgent) and self.lr > 0:
-                ckp_path = self.save_path + 'models/'
+                ckp_path = self.save_path + CKP_LOCATION
                 os.makedirs(ckp_path, exist_ok=True)
                 self.torch.save({
                     'model_state_dict': self.ranking_model.state_dict(),
@@ -673,40 +677,31 @@ class Agent:
                 }, ckp_path + f'fi{os.environ.get("SLURM_ARRAY_TASK_ID", 0)}_e{self.episode}_s{sim_id}.pt')
             
             # complex logic for writing down the parameter settings (only executes once per Simulator run)
-            args_path = self.save_path + 'args.json'
-            if not os.path.isfile(args_path):
-                kwargs = vars(args).copy()
-                # delete/replace large obejcts from the summary object, as these may lead to memory leaks
-                del kwargs['shared']
-                kwargs['agent'] = {k: (str(v) if k in ('optimizer', 'schedulers') else v) \
-                                   for k, v in args.agent.items() if k not in ('ranking_model', 'target_model', 'tb_layout')}
-                # establish R0
-                if args.model == 'covid':
-                    # total time of infectiousness (presymp + symp/asymp duration)
-                    infectious_time_rate = 1 / (1/args.miup + 1/args.gamma)
-                else: # in SIR and SEIR the base rates are directly indicative of the transmission/recovery
-                    infectious_time_rate = args.gamma
-                contacts_scaler = args.netsize if args.nettype == 'complete' else args.k
-                # basic R0 is scaled by the average number of contacts (since the transmission rate is also scaled)
-                kwargs['r0'] = contacts_scaler * args.beta / (infectious_time_rate + 1e-10)
-                # nettype may be a predefined nx.Graph, so make sure the args file is not clunked by it
-                if not isinstance(args.nettype, str):
-                    kwargs['nettype'] = 'predefined'
-                # establish whether ranking model exists
+            # this will be different than an `args` dump within the Simulator because it is tailored to the agent's needs
+            hparams_path = self.save_path + 'hparams.json'
+            if not os.path.isfile(hparams_path):
+                # for agent logging, we exclude some hyperparameters that are not particularly relevant for the agent's behavior
+                exclude = {
+                    'nettype', 'shared', 'ranking_model', 'target_model', # potentially large objects
+                    'k_i', 'is_learning_agent', 'is_record_agent', # set during runtime but not particularly useful here
+                    'zadd_two', 'zrem_two', 'uptake_two', 'overlap_two', 'maintain_overlap_two', # triad graph params typically not used in this context
+                    'animate', 'draw', 'draw_iter', 'draw_config',  # drawing related parameters
+                }
+                kwargs = {k: (str(v) if isinstance(v, Iterable) else v) for k, v in args.items() if k not in exclude}
+                # set the nettype to 'predefined' if the nettype is not a string to avoid clunky json serialization
+                kwargs['nettype'] = args.nettype if isinstance(args.nettype, str) else 'predefined'
+                # rewrite agent parameters in an easier to read format, also compatible with tensorboard logging
+                for k, v in args.agent.items():
+                    if k not in ('ranking_model', 'target_model', 'tb_layout'):
+                        kwargs[f'agent_{k}'] = str(v)
+                # only write model parameters if called from an SL/RL agent
                 if isinstance(self, SLAgent):
                     for k, v in self.ranking_model.init_kwargs.items():
-                        kwargs[f'model_{k}'] = v
-                # write args to file checkpoint
-                with open(args_path, 'w') as f:
-                    json.dump(kwargs, f)
-                
-                if self.writer is not None:
-                    # for the tb writer, we denest the agent dictionary for usability
-                    for k, v in kwargs.pop('agent').items():
-                        kwargs[f'agent_{k}'] = v            
-                    exclude = {'k_i', 'is_learning_agent', 'is_record_agent', 'zadd_two', 'zrem_two', 'update_two', 'overlap_two', 'maintain_overlap_two',
-                              'animate', 'draw', 'draw_iter', 'draw_layout', 'draw_fullname'}
-                    kwargs = {k: (str(v) if isinstance(v, Iterable) else v) for k, v in kwargs.items() if k not in exclude}
+                        kwargs[f'amodel_{k}'] = str(v)
+                # write args to agent checkpoint and to the tensorboard logger
+                with open(hparams_path, 'w') as f:
+                    json.dump(kwargs, f, indent=1)
+                if self.writer is not None:                    
                     self.writer.add_hparams(kwargs, {'hparams/total_inf': total_inf}, run_name='hparams')   
             
     def control_test(self, net, nodes, size=10, freq=None, **kwargs):
@@ -1404,17 +1399,15 @@ class SLAgent(MeasureAgent):
             self.pd = __import__('pandas')
         
         # ranking_model is None or a dict only in evaluation mode when each Agent creates and owns a unique Model instance
-        # this allows for custom behavior, such as truly separate testing and tracing Agents
+        # this allows for custom behavior, such as truly separating testing and tracing Agents
         if not ranking_model:
-            from .rank_model import Model
-            ranking_model = Model.from_dict(self.k_hops, static_measures, torch_seed=self.seed)
+            ranking_model = Agent.model_from_dict(k_hops=self.k_hops, static_measures=static_measures, torch_seed=self.seed)
         elif isinstance(ranking_model, dict):
-            from .rank_model import Model
             if self.mix_learner and 'initial_weights_trace' in ranking_model:
                 ranking_model_copy = ranking_model.copy()
                 ranking_model_copy['initial_weights'] = ranking_model['initial_weights_trace']
                 ranking_model = ranking_model_copy
-            ranking_model = Model.from_dict(self.k_hops, static_measures, **ranking_model)
+            ranking_model = Agent.model_from_dict(k_hops=self.k_hops, static_measures=static_measures, **ranking_model)
         else:
             # make sure previous iteration's h_prev are never utilized
             ranking_model.h_prev = None
