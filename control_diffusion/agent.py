@@ -2067,7 +2067,6 @@ class SLAgent(MeasureAgent):
                     self.optimizer.zero_grad()
                     # h needs to be detached here to avoid in-place modification errors
                     self.ranking_model.h_prev = self.ranking_model.h_prev.detach()
-                    # print(self.ranking_model.f_scorer.output.weight[:50])
                     if self.schedulers:
                         for scheduler in self.schedulers:
                             try:
@@ -2100,8 +2099,9 @@ class SLAgent(MeasureAgent):
             # which_edge: 0 use only aggregates; 1 use only currents; 2 use all edges
             # mask_pred: 0 no mask; 1 mask aggregates (possibly currents if they are the same obj); 2 mask all
             which_edge, mask_pred = self.pred_vars[:2]
-            # if provided, mask_pred_mix allows for masking to be disabled for a tracer/vaxer
-            mask_pred_mix = self.testing or (self.pred_vars[2] if len(self.pred_vars) > 2 else False)
+            # if provided, mask_pred_mix allows for masking to be enabled/disabled for a tracer/vaxer
+            if not self.testing and len(self.pred_vars) > 2:
+                mask_pred = self.pred_vars[2]
             with torch.no_grad():
                 if which_edge == 0:
                     edge_current = (edge_index, edge_attr)
@@ -2110,8 +2110,8 @@ class SLAgent(MeasureAgent):
                 elif which_edge == 2:
                     edge_current = self.edge_current
                 # force subgraphing on eligible nodes (thus removing non-actives from message passing)
-                if mask_pred > 0 and mask_pred_mix:
-                    node_mask = torch.zeros(self.n_nodes, dtype=torch.bool)
+                if mask_pred > 0:
+                    node_mask = torch.zeros(self.n_nodes, dtype=torch.bool, device=device)
                     node_mask[nodes] = True
                     # print(self.control_day, 'Node mask:', sum(node_mask), f'{len(nodes)=} {len(net)=}')
                     edge_mask = node_mask[edge_index[0]] & node_mask[edge_index[1]]
