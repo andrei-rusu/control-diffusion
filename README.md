@@ -6,7 +6,7 @@ For more details, please refer to our EAI PervasiveComputing Conference paper: <
 
 To use, please install the package via `pip`, alongside the Epidemic Simulator linked <a href="https://github.com/andrei-rusu/contact-tracing-model" target="_blank">here</a>.
 
-Note, other simulators could also be used together with this package. To do so, one needs to ensure the following:
+Note, other simulators could also be used together with this package. To do so, one needs to do the following:
 * The simulator needs to instantiate the Agent object through the factory method `from_dict`:
 
     ```python
@@ -16,7 +16,11 @@ Note, other simulators could also be used together with this package. To do so, 
 * The simulator has to call the agent's `control` method at each timestamp with the appropriate parameters.
 
     ```python
-    from control_diffusion import Agent
-    agent = Agent.from_dict(**agent_params)
+    agent.control(network, control_day, initial_known_ids, net_changed, missed_days)
     ```
-* The simulator has to call the agent's `finish` method just before the full simulation is terminated.
+* Optionally, the simulator can call the agent's `finish` method just before the full simulation is terminated, for logging purposes and offline learning.
+    ```python
+    agent.finish(total_infected, args_log)
+    ```
+
+The package can also be used to create highly customizable graph neural network models by calling the factory method ``Agent.model_from_dict``. Additionally, we provide implementations for various helper objects and routines in the ``control_diffusion.general_utils`` module, such as replay buffers, list wrappers compatible with ``torch_geometric``, printing logic enhancements for ``tqdm`` and others.
