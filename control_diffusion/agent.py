@@ -606,7 +606,7 @@ class Agent:
                 self.n_vax = 0
         
         # update entries on the network for visualization purposes
-        net.control_iter, net.control_day = self.control_iter, self.control_day
+        net.control_iter = self.control_iter
         net.computed_measures = self.computed_measures
         net.tested, net.traced = tested, traced | vaxed
         return new_pos, traced, vaxed
