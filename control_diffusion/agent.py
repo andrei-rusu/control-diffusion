@@ -650,6 +650,7 @@ class Agent:
             None
         """
         if self.ckp_ep > 0 and self.episode % self.ckp_ep == 0:
+            print('Logging agent information to finish iteration...')
             # we write the total inf for each `sim_id` per a single separate line after EVERY `ckp_ep` episodes
             rwd_path = self.save_path + 'agent_episode.log'
             sim_id = self.sim_id
@@ -688,20 +689,17 @@ class Agent:
                     'zadd_two', 'zrem_two', 'uptake_two', 'overlap_two', 'maintain_overlap_two', # triad graph params typically not used in this context
                     'animate', 'draw', 'draw_iter', 'draw_config',  # drawing related parameters
                 }
-                try:
-                    kwargs = {k: (str(v) if isinstance(v, Iterable) else v) for k, v in args.items() if k not in exclude}
-                    # set the nettype to 'predefined' if the nettype is not a string to avoid clunky json serialization
-                    kwargs['nettype'] = args.nettype if isinstance(args.nettype, str) else 'predefined'
-                    # rewrite agent parameters in an easier to read format, also compatible with tensorboard logging
-                    for k, v in args.agent.items():
-                        if k not in ('ranking_model', 'target_model', 'tb_layout'):
-                            kwargs[f'agent_{k}'] = str(v)
-                    # only write model parameters if called from an SL/RL agent
-                    if isinstance(self, SLAgent):
-                        for k, v in self.ranking_model.init_kwargs.items():
-                            kwargs[f'amodel_{k}'] = str(v)
-                except Exception as e:
-                    print(f'Error while writing hparams: {e}')
+                kwargs = {k: (str(v) if isinstance(v, Iterable) else v) for k, v in vars(args).items() if k not in exclude}
+                # set the nettype to 'predefined' if the nettype is not a string to avoid clunky json serialization
+                kwargs['nettype'] = args.nettype if isinstance(args.nettype, str) else 'predefined'
+                # rewrite agent parameters in an easier to read format, also compatible with tensorboard logging
+                for k, v in args.agent.items():
+                    if k not in ('ranking_model', 'target_model', 'tb_layout'):
+                        kwargs[f'agent_{k}'] = str(v)
+                # only write model parameters if called from an SL/RL agent
+                if isinstance(self, SLAgent):
+                    for k, v in self.ranking_model.init_kwargs.items():
+                        kwargs[f'amodel_{k}'] = str(v)
                     
                 # write args to agent checkpoint and to the tensorboard logger
                 with open(hparams_path, 'w') as f:
