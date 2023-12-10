@@ -28,15 +28,17 @@ setup(
         'matplotlib', 
         'numpy', 
         'networkx',
+        'tqdm',
     ],
     extras_require={
         'learn': [
             'pandas',
             'scikit-learn',
             'torch',
-            'torch_scatter',
-            'torch_sparse',
             'torch_geometric',
+        ],
+        'learn_extras': [
+            'torch_sparse',
         ],
     },
 )
