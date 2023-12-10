@@ -39,6 +39,7 @@ setup(
         ],
         'learn_extras': [
             'torch_sparse',
+            'torch_scatter',
         ],
     },
 )
