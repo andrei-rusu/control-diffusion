@@ -1,0 +1,45 @@
+
+[project]
+name = "control_diffusion"
+version = "0.1.0"
+description = "A Python package containing agents that can rank nodes in a network for the purpose of controlling diffusion processes."
+readme = "README.md"
+authors = [
+    {name = "Andrei C. Rusu (andrei-rusu)"},
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3.9",
+    "Topic :: Software Development :: Libraries",
+]
+requires-python = ">=3.9"
+dependencies = [
+    "matplotlib",
+    "networkx",
+    "numpy",
+    "tqdm",
+]
+license = {text = "MIT"}
+
+[project.urls]
+Homepage = "https://github.com/andrei-rusu/control-diffusion"
+"Bug Tracker" = "https://github.com/andrei-rusu/control-diffusion/issues"
+
+[project.optional-dependencies]
+learn = [
+    "pandas",
+    "scikit-learn",
+    "torch",
+    "torch_geometric",
+]
+learn_extras = [
+    "torch_scatter",
+    "torch_sparse",
+]
+
+[build-system]
+requires = ["pdm-backend"]
+build-backend = "pdm.backend"
